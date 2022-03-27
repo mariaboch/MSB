@@ -1,0 +1,521 @@
+---
+title: "Latent variable models and dimension reduction techniques"
+author: 
+date: 
+output: html_document
+---
+
+## Homework Problems
+
+Within this notebook, there are a few homework problems for you to complete. These problems are written in a blockquote:
+
+> Homework Problem Example 1. Compute SVD.
+
+When you have finished following this notebook and completing all the homework problems, upload your 1 Rscript and 5 figures to your [Github](http://github.com) account. Make sure your figures are named "problem1_xyz.pdf", "problem2_xyz.pdf", and so on. Of course, if you haven't yet, create an account and learn how to use Github.
+
+Once you are done uploading, add me [ncchung](https://github.com/ncchung) as your collaborator. If you add me BEFORE you are completely done with your homework, your grade will be based on *incomplete* work. Make sure you complete this homework before the next class, October 28th (Monday).
+
+## Dependencies
+
+Some packages must be downloaded from CRAN or Bioconductor. R packages on CRAN can be installed with `install.packages()`. Bioconductor packages are installed by using `BiocManager::install()`. There may be challenges in installation procedures. So if basic commands don't work, please search.
+
+```{r load_hidden, echo=FALSE, results="hide", warning=FALSE}
+suppressPackageStartupMessages({
+  library(devtools)
+  library(Biobase)
+  library(limma)
+  library(edge)
+  library(genefilter)
+  library(qvalue)
+library(tidyverse)
+library(corpcor)
+  library(data.table)
+  library(jackstraw)
+  library(rpca)
+})
+```
+
+```{r load}
+library(devtools)
+library(Biobase)
+library(limma)
+library(edge)
+library(genefilter)
+library(qvalue)
+library(tidyverse)
+library(data.table)
+library(corpcor)
+```
+
+## Load the `ExpressionSet` data 
+
+We use the mouse RNA-seq data from the last week. We load the `ExpressionSet` dataset that was saved from the previous week. Please look at the previous week's notebook.
+
+[Evaluating gene expression in C57BL/6J and DBA/2J mouse striatum using RNA-Seq and microarrays.](http://www.ncbi.nlm.nih.gov/pubmed?term=21455293)
+
+Make sure to apply log2 transformation and remove genes whose expression levels are below a threshold, 10: 
+
+```{r}
+#if you need to recall it - this is how it went:
+con = url("http://bowtie-bio.sourceforge.net/recount/ExpressionSets/bottomly_eset.RData")
+load(file=con)
+close(con)
+summary(bottomly.eset)
+class(bottomly.eset)
+save(bottomly.eset, file="bottomly.Rdata")
+```
+
+
+```{r}
+load(file="bottomly.Rdata")
+
+edata <- as.matrix(exprs(bottomly.eset))
+dim(edata)
+edata[1:5,1:5]
+edata <- log2(as.matrix(edata) + 1)
+edata <- edata[rowMeans(edata) > 10, ]
+```
+
+Create a heatmap with and without clustering the columns. Observe the genes are highly correlated, revealing the systematic variation in the clustered heatmap:
+
+```{r}
+library(RColorBrewer)
+library(gplots)
+my_palette <- colorRampPalette(c("blue", "white", "orange"))(n = 299)
+
+png("bottomly_heatmap_raw.png",height=700,width=700)
+heatmap.2(edata,
+          main = "Bottomly et al. Raw", # heat map title
+          notecol="black",      # change font color of cell labels to black
+          density.info="none",  # turns off density plot inside color legend
+          trace="none",         # turns off trace lines inside the heat map
+          margins =c(12,9),     # widens margins around plot
+          col=my_palette,       # use on color palette defined earlier 
+          dendrogram="none",     # only draw a row dendrogram
+          scale = "row",
+          Colv=FALSE)
+dev.off()
+
+png("bottomly_heatmap_clustered.png",height=700,width=700)
+heatmap.2(edata,
+          main = "Bottomly et al. Clustered", # heat map title
+          notecol="black",      # change font color of cell labels to black
+          density.info="none",  # turns off density plot inside color legend
+          trace="none",         # turns off trace lines inside the heat map
+          margins =c(12,9),     # widens margins around plot
+          col=my_palette,       # use on color palette defined earlier 
+          dendrogram="none",     # only draw a row dendrogram
+          scale = "row")
+dev.off()
+```
+
+> Homework Problem 1.
+> Make one heatmap of the aforementioned Bottomly data with the following options: a) both rows and columns are clustered, b) show a dendrogram only on the columns., and c) scale in the column direction. Send only one heatmap. If you are unsure, check the help document on this function by typing ?heatmap.2
+
+```{r}
+
+library(RColorBrewer)
+library(gplots)
+my_palette <- colorRampPalette(c("blue", "white", "orange"))(n = 299)
+
+heatmap.2(edata,
+          main = "Bottomly et al.", # heat map title
+          notecol="black",      # change font color of cell labels to black
+          density.info="none",  # turns off density plot inside color legend
+          trace="none",         # turns off trace lines inside the heat map
+          margins =c(12,9),     # widens margins around plot
+          col=my_palette,       # use on color palette defined earlier 
+          dendrogram="column",  # show a dendrogram only on the columns
+          scale = "column",     # scale in the column direction
+          Rowv=TRUE,
+          Colv=TRUE)            # both rows and columns are clustered
+
+```
+```{r}
+pdf("problem1_mbochenek.pdf")
+heatmap.2(edata,
+          main = "Bottomly et al.", # heat map title
+          notecol="black",      # change font color of cell labels to black
+          density.info="none",  # turns off density plot inside color legend
+          trace="none",         # turns off trace lines inside the heat map
+          margins =c(12,9),     # widens margins around plot
+          col=my_palette,       # use on color palette defined earlier 
+          dendrogram="column",  # show a dendrogram only on the columns
+          scale = "column",     # scale in the column direction
+          Rowv=TRUE,
+          Colv=TRUE)          # both rows and columns are clustered
+dev.off()
+```
+
+
+## Singular value decomposition (SVD)
+
+Singular value decomposition gives us the left and right singular vectors, and the singluar values (`d`). It is a computationally efficient way to compute principal component analysis.
+
+```{r}
+edata <- t(scale(t(edata), scale=FALSE, center=TRUE))
+svd.out <- svd(edata)
+names(svd.out)
+
+print(paste("Dimension of left singular vectors:", dim(svd.out$u)))
+print(paste("Length of singular values:",length(svd.out$d)))
+print(paste("Dimension of right singular vectors:",dim(svd.out$v)))
+```
+
+The key choice one has to make when conducting PCA for genomic data is the dimension `r`. Likely, you would want `r` to be (much) smaller than `min(n,m)` such that you achieve dimension reduction. The first step is looking at the scree plot, that is the variance explained. Often, one want to identify the elbow of the scree plot.
+
+```{r}
+par(mfrow=c(1,2))
+plot(svd.out$d, pch=20, ylab="Singular values")
+plot(svd.out$d^2/sum(svd.out$d^2)*100, pch=20, ylab="% variance explained")
+```
+
+In practice, these results may not be consistent and some of them may not be suitable for your data. If a statistical method, your data may not meet the assumption made by it. Often, consult the biologists or biological knowledge. 
+
+## Scatter plots using right Singular Vectors (Principal Components)
+
+Exactly what are principal components and their corresponding loadings depends on the orientation of the input data. In our case, the genes/variables are rows whereas the samples/observations are columns. Then, PCs equals the corresponding singular values times the right singular vectors. These are sometimes called eigengenes to denote that they represents a weighted linear sum of genes (rows). We look at the top 3 right singular vectors:
+
+```{r}
+plot(1:ncol(edata), svd.out$v[,1],pch=20)
+plot(1:ncol(edata), svd.out$v[,2],pch=20)
+plot(1:ncol(edata), svd.out$v[,3],pch=20)
+```
+
+We can make a scatter plot of the top 2 PCs. And using the meta data, we can color each data point accordingly. To do so, we will use ggplot2. 
+
+```{r}
+PC = data.table(svd.out$v,pData(bottomly.eset))
+ggplot(PC) + geom_point(aes(x=V1, y=V2, col=as.factor(strain)))
+ggplot(PC) + geom_point(aes(x=V1, y=V2, col=as.factor(lane.number)))
+ggplot(PC) + geom_point(aes(x=V1, y=V2, col=as.factor(experiment.number)))
+```
+
+> Homework Problem 2.
+> As shown in the plot above, the projection on the top 2 PCs doesn't show the grouping by the strains. But we have many PCs to explore. Explore different combinations of PCs in scatter plots while coloring the data points by the genetic strains. Find a combination of PCs that separate the strains well. Send only one scatterplot.
+
+```{r}
+
+ggplot(PC) + geom_point(aes(x=V1, y=V2, col=as.factor(strain)))
+ggplot(PC) + geom_point(aes(x=V1, y=V3, col=as.factor(strain)))
+ggplot(PC) + geom_point(aes(x=V1, y=V4, col=as.factor(strain)))
+ggplot(PC) + geom_point(aes(x=V1, y=V5, col=as.factor(strain)))
+ggplot(PC) + geom_point(aes(x=V1, y=V6, col=as.factor(strain)))
+
+ggplot(PC) + geom_point(aes(x=V2, y=V3, col=as.factor(strain)))
+ggplot(PC) + geom_point(aes(x=V2, y=V4, col=as.factor(strain)))
+ggplot(PC) + geom_point(aes(x=V2, y=V5, col=as.factor(strain)))
+ggplot(PC) + geom_point(aes(x=V2, y=V6, col=as.factor(strain)))
+
+ggplot(PC) + geom_point(aes(x=V3, y=V4, col=as.factor(strain)))
+ggplot(PC) + geom_point(aes(x=V3, y=V5, col=as.factor(strain)))
+ggplot(PC) + geom_point(aes(x=V3, y=V6, col=as.factor(strain)))
+
+ggplot(PC) + geom_point(aes(x=V4, y=V5, col=as.factor(strain)))
+ggplot(PC) + geom_point(aes(x=V4, y=V6, col=as.factor(strain)))
+
+ggplot(PC) + geom_point(aes(x=V5, y=V6, col=as.factor(strain)))
+
+```
+
+```{r}
+PC_df <- as.data.frame(PC)
+for (i in 1:21){
+  for (j in 1:21) {
+    if (j > i) {
+      print(ggplot(PC_df) + geom_point(aes(x=PC_df[, i], y=PC_df[, j], col=as.factor(strain))) + xlab(paste("V", i)) + ylab(paste("V", j))  )
+    }
+  }
+}
+
+```
+
+
+```{r}
+ggplot(PC) + geom_point(aes(x=V3, y=V4, col=as.factor(strain))) + ggtitle("PCs separating strains")
+
+```
+
+```{r}
+pdf("problem2_mbochenek.pdf", height=7, width=10)
+ggplot(PC) + geom_point(aes(x=V3, y=V4, col=as.factor(strain))) + ggtitle("PCs separating strains")
+dev.off()
+
+```
+
+
+## Boxplots and violin plots
+
+Violin plots extend boxplots by showing the density estimates. However, both violin plots and boxplots would be better served when the original values are overlayed (the last plot below).
+
+```{r}
+ggplot(PC) + geom_boxplot(aes(x=as.factor(strain), y=V1))
+
+ggplot(PC) + geom_violin(aes(x=as.factor(strain), y=V1),draw_quantiles = c(0.25, 0.5, 0.75))
+
+ggplot(PC) + geom_violin(aes(x=as.factor(strain), y=V1),draw_quantiles = c(0.25, 0.5, 0.75)) + geom_jitter(aes(x=as.factor(strain), y=V1))
+```
+
+## Visualize Left Singular Vectors (Loadings)
+
+As we had done with right singular vectors, we can apply the similar exploration and visualization using left singular vectors. The left singular vectors are often called the loadings of PCs.
+
+> Homework Problem 3.
+> Make a scatter plot of the top 2 left singular vectors.
+
+```{r}
+LSV = data.table(svd.out$u)
+ggplot(LSV) + geom_point(aes(x=V1, y=V2)) + ggtitle("The top 2 left singular vectors")
+#xlab("First left singular vector") + ylab("Second left singular vector")
+```
+
+```{r}
+
+pdf("problem3_mbochenek.pdf", height=7, width=10)
+ggplot(LSV) + geom_point(aes(x=V1, y=V2)) + ggtitle("The top 2 left singular vectors")
+dev.off()
+```
+
+
+> Homework Problem 4.
+> Make one figure that contains violin plots of the top 5 left singular vectors (loadings). Turn the top 5 left singular vectors into a data.table (or a data.frame) and ggplot2 to plot them altogether. Do not send 5 figures!
+
+```{r}
+LSV_5 <- data.frame(
+  lsv_nr = as.factor(c(rep(1, nrow(svd.out$u)), rep(2, nrow(svd.out$u)), rep(3, nrow(svd.out$u)), rep(4, nrow(svd.out$u)), rep(5, nrow(svd.out$u)))),
+  lsv_values = c(svd.out$u[, 1], svd.out$u[, 2], svd.out$u[, 3], svd.out$u[, 4], svd.out$u[, 5])
+)
+ggplot(LSV_5, aes(x=lsv_nr, y=lsv_values)) + geom_violin(draw_quantiles = c(0.25, 0.5, 0.75))
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+LSV_5 <- data.table(svd.out$u[, 1:5])
+LSV_5 <- gather(LSV_5, key="LSV_number", value="Values")
+ggplot(LSV_5, aes(x=0, y=Values)) + geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) + facet_grid(~LSV_number) + xlab("") + ylab("Vector values") + 
+  ggtitle("The top 5 left singular vectors")
+
+```
+
+```{r}
+pdf("problem4_mbochenek.pdf", height = 7, width = 10)
+ggplot(LSV_5, aes(x=0, y=Values)) + geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) + facet_grid(~LSV_number) + xlab("") + ylab("Vector values") + 
+  ggtitle("The top 5 left singular vectors")
+dev.off()
+```
+
+
+## Role of Normalization 
+
+PCA has a long history in multivariate analysis. Combined with that of eigendecomposition, singular value decomposition, and related methods, there are confusing terminologies. If you are to use the PCA functions in R, you may get different results.
+
+```{r}
+# compute PCs using prcomp and compare it with SVD
+pc1 = prcomp(edata)
+plot(pc1$rotation[,1],svd.out$v[,1])
+
+# the results are different, because technically the data should be centered by column means
+edata.col <- scale(edata, scale=FALSE, center=TRUE)
+svd.col <- svd(edata.col)
+plot(pc1$rotation[,1],svd.col$v[,1],col=2)
+abline(0,1)
+all(pc1$rotation[,1] == svd.col$v[,1])
+```
+
+However, in genomics and modern high-dimensional data analysis, it's common to perform row-wise centering (and even scaling). Then, SVD is applied and the right singular vectors are often shown as PCs. 
+
+## Apply truncated SVD
+
+When the data is very large, SVD becomes a computational bottleneck. In fact, in a personal computer, it may not work at all. Since we know that we may be only interested in `r` PCs (or singular vectors), we could use an approximation called truncated SVD/PCA using a package `irlba`:
+
+> The augmented implicitly restarted Lanczos bidiagonalization algorithm (IRLBA) finds a few approximate largest (or, optionally, smallest) singular values and corresponding singular vectors of a sparse or dense matrix using a method of Baglama and Reichel. It is a fast and memory-efficient way to compute a partial SVD.
+
+```{r}
+library(irlba)
+tsvd.out <- irlba(edata, nv = 4)
+dim(tsvd.out$u)
+length(tsvd.out$d)
+dim(tsvd.out$v)
+```
+
+Compare their approximate singular values:
+
+```{r}
+cbind(tsvd.out$d[1:10], svd.out$d[1:10])
+
+plot(tsvd.out$v[,1],svd.out$v[,1])
+plot(tsvd.out$v[,1],svd.out$v[,1])
+```
+
+## Sparse PCA and penalized matrix decomposition
+
+Sparse PCA is invented for high dimensional data in which many loadings are expected to be zero. In such sparse data, conventional PCA would result in all non-negative loadings and PCs. We can enforce sparsity by introducing a penalty.
+
+Penalized matrix decomposition is its generalization and well implemented by penalized matrix analysis (PMA) package in R. Particularly, we will use the function SPC which applies PMD with $L_1$ penalty on the columns and no penalty on the rows. The tuning parameter controls $L_1$, which can be selected by cross-validation.
+
+Install and load the PMA package. Then we apply the 5-fold cross validation for tuning parameters between 1 and $sqrt(nrow(edata))$:
+
+```{r}
+install.packages("PMA")
+library("PMA")
+# use cross validation to select the tuning parameter
+# sumabs must be between 1 and sqrt(ncol(x))
+PMA.para <- SPC.cv(x=t(edata), sumabsv=seq(1, sqrt(nrow(edata)), len=100), nfolds=5, trace=FALSE)
+plot(PMA.para$sumabsvs,PMA.para$cv, pch=20)
+abline(v=PMA.para$bestsumabsv, col="red")
+```
+
+The tuning parameter (the sum of absolute values) is estimated to be about 31. Then we apply sparse PCA using a function `SPC`. Make sure to check the dimensions of results:
+
+```{r}
+# run the Sparse PC algorithm from the PMA package
+PMA.out <- SPC(x=t(edata), sumabsv=PMA.para$bestsumabsv, K=5, orth=FALSE, trace=FALSE)
+dim(PMA.out$u)
+length(PMA.out$d)
+dim(PMA.out$v)
+
+svdpmd = data.table(loading=svd.out$u[,1], sparseloading=PMA.out$v[,1])
+ggplot(svdpmd) + geom_point(aes(loading,-sparseloading,col= sparseloading == 0))
+```
+
+However, in the above case, where the tuning parameter is chosen via CV, we found that no loading has been set to zero. For an illustration purpose, we will apply  
+
+```{r}
+# run the Sparse PC algorithm from the PMA package
+PMA.out <- SPC(x=t(edata), sumabsv=20, K=5, orth=FALSE, trace=FALSE)
+sum(PMA.out$v[,1] == 0)
+
+svdpmd = data.table(loading=svd.out$u[,1], sparseloading=PMA.out$v[,1])
+ggplot(svdpmd) + geom_point(aes(loading,-sparseloading,col=sparseloading == 0))
+```
+
+## Apply t-Distributed Stochastic Neighbor Embedding (t-SNE)
+
+t-Distributed Stochastic Neighbor Embedding (t-SNE) is an algorithm for dimension reduction and visualization. It's especially popular in machine learning and often uses PCA as a pre-processing step.
+
+In this example, we apply t-SNE among the genes. Each point in a scatter plot then correspond to a gene. Typically, one would search for a pattern or a clustering.
+
+```{r}
+library(irlba)
+library(Rtsne)
+
+# Set a seed for reproducible results
+set.seed(1)
+# complexity is a hyperparameter needed for this algorithm. 30 is a default
+tsne_out <- Rtsne(edata,pca=FALSE,perplexity=30)
+tsne_out = data.table(tsne_out$Y)
+ggplot(tsne_out) + geom_point(aes(x=V1, y=V2))
+
+# Use irlba as a pre-processing step, using 2 cores
+# e.g., obtain 10 PCs, and then apply t-SNE down to 2 dim.
+tsne_out_svd <- Rtsne(edata, partial_pca = TRUE, initial_dims=10, num_threads = 2)
+tsne_out_svd = data.table(tsne_out_svd$Y)
+ggplot(tsne_out_svd) + geom_point(aes(x=V1, y=V2))
+```
+
+Unlike SVD/PCA, t-SNE returns (slightly so) different results everytime it runs on the same dataset. So it can not be compared directly. Furthermore, t-SNE doesn't provide a mapping function from observed high-dimensional data to the low dimensional space. Therefore, if a new data point (e.g., a sample) is obtained, it can't be placed onto a t-SNE projection.
+
+Nonetheless, t-SNE may provide interesting low-dimensional plot. PCs maximize variances explained. t-SNE focuses on local similarities. 
+
+We cluster the genes using K-means clustering on the original data. Then, use the clusters to color the data points in t-SNE projection:
+
+```{r}
+k.data <- kmeans(edata, centers=3)
+tsne_out = data.table(tsne_out, cluster = as.factor(k.data$cluster))
+ggplot(tsne_out) + geom_point(aes(x=V1, y=V2, col=cluster))
+```
+
+```{r}
+loadings = data.table(svd.out$u, cluster = as.factor(k.data$cluster))
+ggplot(loadings) + geom_point(aes(x=V1, y=V2, col=cluster))
+```
+
+## RPCA - Robust PCA another way to catch the sparse signal
+
+```{r}
+#initial technical parameters for the experiment
+my.frame.size <- 100
+no.frames <- 50
+my.object.dim <- 5
+my.marg <- floor(5/2)
+
+generate_background <- function(frame.size = 100){
+  matrix(rnorm(frame.size * frame.size), nrow = frame.size)
+}
+
+object_moves <- function(bgrnd, objt, x.path, y.path, simple=T){ 
+  if(simple){
+    sapply ( 1:length(x.path), function(i){
+      bgrnd[(x.path[i]-2):(x.path[i]+2), (y.path[i]-2):(y.path[i]+2)] <- objt 
+      as.vector(bgrnd)
+    })
+  } else {
+    sapply ( 1:ncol(bgrnd), function(i){
+      tmp_ = matrix(bgrnd[,i], nrow = sqrt(nrow(bgrnd)))
+      tmp_[(x.path[i]-2):(x.path[i]+2), (y.path[i]-2):(y.path[i]+2)] <- objt 
+      as.vector(tmp_)
+    })
+  }
+}
+```
+
+```{r}
+# generate data - constant background with a square moving around on each frame
+my.object <- matrix(rnorm(my.object.dim * my.object.dim), my.object.dim, my.object.dim)
+my.bckg <- generate_background()
+my.x.path <- sample((1+my.marg):(my.frame.size-my.marg), no.frames)
+my.y.path <- sample((1+my.marg):(my.frame.size-my.marg), no.frames)
+my.rpca.dat <- object_moves(my.bckg, my.object, my.x.path, my.y.path)
+
+# perform RPCA to detect the movement
+my.res <- rpca(my.rpca.dat)
+```
+
+```{r}
+# visualization of 3 random frames, each row has: original "image", L and S components
+get.frame <- function(my.dat, frame){
+  my.frame <- matrix(my.dat[,frame], nrow = sqrt(nrow(my.dat)))
+}
+no.frames.to.visualize <- 3
+frames.to.visualize <- sample(1:no.frames, no.frames.to.visualize)
+
+par(mar = c(1, 1, 1, 1))
+par(mfrow=c(no.frames.to.visualize,3))
+
+for(i in frames.to.visualize ){
+  image(get.frame(my.dat = my.rpca.dat, frame = i))
+  image(get.frame(my.dat = my.res$L, frame = i))
+  image(get.frame(my.dat = my.res$S, frame = i))
+}
+```
+
+Here we can see how from an image of a mixture of a background and some random shape moving here and there (left) we are capable to extract such information separately as the background (middle) and the moving shape (right).
+
+We can try adding another random shape to see if we still control the situation.
+
+```{r}
+my.object.2 <- matrix(rnorm(my.object.dim * my.object.dim), my.object.dim, my.object.dim)
+my.x.path.2 <- sample((1+my.marg):(my.frame.size-my.marg), no.frames)
+my.y.path.2 <- sample((1+my.marg):(my.frame.size-my.marg), no.frames)
+
+my.rpca.dat.2 <- object_moves(my.rpca.dat, my.object.2, my.x.path.2, my.y.path.2, simple = F)
+my.res.2 <- rpca(my.rpca.dat.2)
+```
+
+Let us find out
+```{r}
+frames.to.visualize <- sample(1:no.frames, no.frames.to.visualize)
+par(mar = c(1, 1, 1, 1))
+par(mfrow=c(no.frames.to.visualize,3))
+
+for(i in frames.to.visualize ){
+  image(get.frame(my.dat = my.rpca.dat.2, frame = i))
+  image(get.frame(my.dat = my.res.2$L, frame = i))
+  image(get.frame(my.dat = my.res.2$S, frame = i))
+}
+```
+
+As we can see we are still getting a full picture of what is going on!
